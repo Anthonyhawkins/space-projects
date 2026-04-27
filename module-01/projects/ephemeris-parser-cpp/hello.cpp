@@ -3,69 +3,8 @@
 #include <vector>
 #include <sstream>
 #include <string>
-
-
-// Holds Attributes and Methods for a Single Ephemeris
-class Ephemeris {
-    public:
-                                //pass by ref vs copying, good for long strings, more efic
-                                //              initializer list  used to directly init member vars
-        Ephemeris(const std::string& fileName) : fileName(fileName){ 
-            // parse the filename into known parts
-            parseFileName();
-        }
-
-        std::string fileName;
-        //Usually Mean Equator Mean Equinox, an Earth-centered inertial reference frame used for orbital state vectors
-        std::string referenceFrame;
-        //Unique tracking ID used by organizations like Space-Track and CelesTrak for this object
-        std::string noradId;
-        //The spacecraft’s constellation identifier within the Starlink network
-        std::string starlinkId;
-        //Likely a SpaceX internal identifier for manufacturing, mission planning, or ephemeris generation
-        std::string internalId;
-        //Indicates the spacecraft is in active service rather than transfer, disposal, drift, or parking
-        std::string status;
-        //Likely a unique internal version ID for this specific ephemeris file generation
-        std::string internalExportId;
-        //Indicates the file is approved for public release
-        std::string classification;
-
-        void print() const {
-            std::cout   << "fileName: " << fileName << "\n"
-                        << "\treferenceFrame: " << referenceFrame << "\n"
-                        << "\tstarlinkId: " << starlinkId << "\n"
-                        << "\tstatus: " << status << "\n"
-                        << std::endl;
-        }
-
-    private:
-        void parseFileName(){
-            std::vector<std::string> tokens;
-            std::istringstream iss(fileName);
-            std::string token;
-
-            char deliminator = '_';
-            while(std::getline(iss, token, deliminator)) {
-                tokens.push_back(token);
-            }
-
-            referenceFrame = tokens[0];
-            noradId = tokens[1];
-            starlinkId = tokens[2];
-            internalId = tokens[3];
-            status = tokens[4];
-            internalExportId = tokens[5];
-            classification = tokens[6];
-        }
-
-        // fetch obtains the contents for this ephemeris
-        void fetch() {
-
-        }
-
-};
-
+#include <fstream>
+#include <iostream>
 
 // Obtain a List of ephemeris from MANIFEST URL
 size_t writeCallback(void* contents, size_t size, size_t nmemb, void* userp) {
@@ -103,9 +42,89 @@ httpResponse httpGet(std::string& url) {
     };
 }
 
+// Holds Attributes and Methods for a Single Ephemeris
+class Ephemeris {
+    public:
+                                //pass by ref vs copying, good for long strings, more efic
+                                //              initializer list  used to directly init member vars
+        Ephemeris(const std::string& fileName, const std::string&baseUrl) : fileName(fileName), baseUrl(baseUrl){ 
+            // parse the filename into known parts
+            parseFileName();
+        }
+
+        std::string fileName;
+        //Usually Mean Equator Mean Equinox, an Earth-centered inertial reference frame used for orbital state vectors
+        std::string referenceFrame;
+        //Unique tracking ID used by organizations like Space-Track and CelesTrak for this object
+        std::string noradId;
+        //The spacecraft’s constellation identifier within the Starlink network
+        std::string starlinkId;
+        //Likely a SpaceX internal identifier for manufacturing, mission planning, or ephemeris generation
+        std::string internalId;
+        //Indicates the spacecraft is in active service rather than transfer, disposal, drift, or parking
+        std::string status;
+        //Likely a unique internal version ID for this specific ephemeris file generation
+        std::string internalExportId;
+        //Indicates the file is approved for public release
+        std::string classification;
+
+        std::string baseUrl;
+        
+        // the raw output from the eph url
+        std::string rawBody;
+
+        void print() const {
+            std::cout   << "fileName: " << fileName << "\n"
+                        << "\treferenceFrame: " << referenceFrame << "\n"
+                        << "\tstarlinkId: " << starlinkId << "\n"
+                        << "\tstatus: " << status << "\n"
+                        << std::endl;
+        }
+
+        void saveToFIle(const std::string& path) {
+            std::ofstream out(path + "/" + fileName);
+            if (!out) {
+                std::cerr << "Faild to open " << path + "/" + fileName << "\n";
+                return;
+            }
+            out << rawBody;
+        }
+
+        // fetch obtains the contents for this ephemeris
+        void fetch() {
+            std::string url = baseUrl + fileName;
+            httpResponse res;
+            res = httpGet(url);
+            if (res.ok) {
+                rawBody = res.body;
+            }
+        }
+
+    private:
+        void parseFileName(){
+            std::vector<std::string> tokens;
+            std::istringstream iss(fileName);
+            std::string token;
+
+            char deliminator = '_';
+            while(std::getline(iss, token, deliminator)) {
+                tokens.push_back(token);
+            }
+
+            referenceFrame = tokens[0];
+            noradId = tokens[1];
+            starlinkId = tokens[2];
+            internalId = tokens[3];
+            status = tokens[4];
+            internalExportId = tokens[5];
+            classification = tokens[6];
+        }
+};
+
+
 class StarlinkEphemeridesClient {
     public:
-         StarlinkEphemeridesClient(){
+         StarlinkEphemeridesClient(const std::string& baseUrl) : baseUrl(baseUrl){
             getManifest();
     
         }
@@ -122,12 +141,29 @@ class StarlinkEphemeridesClient {
             }
         }
 
+        // fetchAll obtains the contents for all ephemerides and parses them into structured types
+        void fetchAll() {
+            int count = 1;
+            for (auto& eph : ephemerides) {
+                std::cout << "Fetching and Saving... " << eph.fileName << std::endl; 
+                eph.fetch();
+                eph.saveToFIle("local-eph/cache");
+
+                if (count == 3) {
+                    break;
+                }
+                ++count;
+            }
+        }
+
+        // Hosting Site
+        std::string baseUrl;
         // List of Ephemeris
         std::vector<Ephemeris> ephemerides;
 
     private:
         void getManifest() {
-            std::string url = "https://api.starlink.com/public-files/ephemerides/MANIFEST.txt";
+            std::string url = baseUrl + "MANIFEST.txt";
             httpResponse res;
             res = httpGet(url);
             if (res.ok) {
@@ -140,24 +176,30 @@ class StarlinkEphemeridesClient {
             std::istringstream iss(manifest);
             std::string line;
             while (std::getline(iss, line)) {
-                ephemerides.emplace_back(line);
+                ephemerides.emplace_back(line, baseUrl);
             }
         }
-
-        // fetchAll obtains the contents for all ephemerides and parses them into structured types
-        void fetchAll() {
-
-        }
-
-
-
 };
 
 
-int main(){
+int main(int argc, char* argv[]){
+
+    std::string endpoint = "https://api.starlink.com";
+    const std::string path = "/public-files/ephemerides/";
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--local") {
+            endpoint = "http://localhost:8080";
+        }
+    }
+
+    std::cout << "Using Endpoint: " << endpoint << std::endl;
+
     curl_global_init(CURL_GLOBAL_DEFAULT);
-    StarlinkEphemeridesClient client;
-    client.printAll();
+    StarlinkEphemeridesClient client(endpoint+path);
+    //client.printAll();
+    client.fetchAll();
     curl_global_cleanup();
 
     std::cout << "total ephemerides " << client.ephemerides.size() << std::endl;
