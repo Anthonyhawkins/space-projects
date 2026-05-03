@@ -1,49 +1,34 @@
 #include <filesystem>
+#include <algorithm>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
-#include <vector>
 #include <string>
-
+#include <thread>
+#include <mutex>
+#include <vector>
 #include <curl/curl.h>
 
+std::mutex coutMutex;
 
-// class Ephemeris 
-class Ephemeris {};
-    //func constructor(sting file)
-    // - from a file, construct an eph <-- DONT DO THIS
+/**
+ * UTILS
+ */
+std::vector<std::string> split(const std::string& input, char delim){
+    std::vector<std::string> parts;
+    std::size_t start = 0;
 
-    /**
-     * 
-     * fileName 
-     * 
-     * //Usually Mean Equator Mean Equinox, an Earth-centered inertial reference frame used for orbital state vectors
-     * referenceFrame
-     * 
-     * //Unique tracking ID used by organizations like Space-Track and CelesTrak for this object
-     * noradId
-     * 
-     * /The spacecraft’s constellation identifier within the Starlink network
-     * starlinkId
-     *
-     * //Likely a SpaceX internal identifier for manufacturing, mission planning, or ephemeris generation
-     * internalId
-     * 
-     * //Indicates the spacecraft is in active service rather than transfer, disposal, drift, or parking
-     * status
-     * 
-     * //Likely a unique internal version ID for this specific ephemeris file generation
-     * internalExportId
-     * 
-     * //Indicates the file is approved for public release
-     * classification
-     */
-
-     /**
-      * //raw unparsed body
-      * rawBody
-      */
-
+    for (std::size_t i = 0; i < input.size(); ++i){
+        if (input[i] == delim) {
+            parts.push_back(input.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    
+    parts.push_back(input.substr(start));
+    return parts;
+};
 
 struct Config {
     std::string loader;
@@ -54,18 +39,62 @@ struct Config {
 };
 
 
-// class Satellite
+class Satellite{
+    public:
+        Satellite() : fileName(""), error(""){}
+        Satellite(const std::string& fileName) : fileName(fileName), error("") {
 
-    //func constructor(Ephemeris eph)
-    //  - parse eph instantiate sat from eph
+            if (fileName.empty()) {
+                error = "Filenames must not be empty strings.";
+                return;
+            }
 
-    /**
-     * norad-id
-     * starlink-id 
-     * status
-     * export-id
-     * classification
-     */
+            std::string nameAndExt;
+            std::vector<std::string> pathParts = split(fileName, '/');
+            if (pathParts.size() > 0) {
+                nameAndExt = pathParts.back();
+            }
+
+            std::vector<std::string> nameAndExtParts = split(nameAndExt, '.');
+            if (nameAndExtParts.empty()) {
+                error = "Unable to parsefilename, doesn't look like a .<ext> file. Missing .";
+                return;
+            }
+
+            std::vector<std::string> nameParts = split(fileName, '_');
+            if (nameParts.size() != 7) {
+                error = "Filename was split into more parts than expected.  Looking for 7, found " 
+                + std::to_string(nameParts.size());
+                return;
+            }
+
+            referenceFrame = nameParts[0];
+            noradId = nameParts[1];
+            starlinkId = nameParts[3];
+            internalId = nameParts[4];
+            status = nameParts[5];
+            internalExportId = nameParts[6];
+            classification = nameParts[7];
+
+        }
+
+        std::string fileName;
+        //Usually Mean Equator Mean Equinox, an Earth-centered inertial reference frame used for orbital state vectors        
+        std::string referenceFrame;
+        //Unique tracking ID used by organizations like Space-Track and CelesTrak for this object
+        std::string noradId;
+        //The spacecraft’s constellation identifier within the Starlink network
+        std::string starlinkId;
+        //Likely a SpaceX internal identifier for manufacturing, mission planning, or ephemeris generation
+        std::string internalId;
+        //Indicates the spacecraft is in active service rather than transfer, disposal, drift, or parking
+        std::string status;
+        //Likely a unique internal version ID for this specific ephemeris file generation
+        std::string internalExportId;
+        //Indicates the file is approved for public release
+        std::string classification;
+
+        std::string error;
 
     /**
      * createdAt created:2026-04-25 12:03:33 UTC
@@ -113,13 +142,17 @@ struct Config {
      */
 
 
+    
+};
+
+
 
 // Interface Loader
     // func Load() returns ephs[]
 class Loader {
     public:
         virtual ~Loader() = default;
-        virtual std::vector<Ephemeris> load() = 0; // important, makes it 'interface-like'
+        virtual std::vector<Satellite> load() = 0; // important, makes it 'interface-like'
 };
 
 
@@ -131,7 +164,7 @@ class WebLoader : public Loader {
 
         };
 
-        std::vector<Ephemeris> load(){
+        std::vector<Satellite> load(){
             //Get Manifest Page, Check For 200
             //Parse Manifest, return []files
             //For Each File
@@ -139,12 +172,13 @@ class WebLoader : public Loader {
             //Create Eph
             //Append
             // Return ephs
-        };
+            return {};
+        }
 
         Config& config;
 
         //store created ephs from content
-        std::vector<Ephemeris> ephemerides;
+        std::vector<Satellite> satellites;
 
 };
 // Class FileLoader
@@ -154,43 +188,99 @@ class FileLoader : public Loader {
 
         };
 
-        std::vector<Ephemeris> load() {
-            std::vector<Ephemeris> ephs;
-            std::filesystem::path dir = config.dir;
+        std::vector<Satellite> load() {
         
             // Does Dir Exist?
+            std::filesystem::path dir = config.dir;
             if (!(std::filesystem::exists(dir) && std::filesystem::is_directory(dir))){
                 // Directory Does Not Exist
-                // TODO - create a loadResult struct which has {ephs, ok, error}
+                // TODO - create a loadResult struct which has {sats, ok, error}
             }
-            // Determine num_files
-            std::size_t count = 0;
+            // Load filenames
+            std::vector<std::filesystem::path> files;
             for (const auto& entry : std::filesystem::directory_iterator(dir)){
                 if (entry.is_regular_file()){
-                    count++;
+                    // we can prob parse the filename here
+                    // check if file is .txt
+                    files.push_back(entry.path());
                 }
             }
 
+            //ceiling division to ensure we round up, not down. no file left behind!
+            std::size_t numFilesPerWorker = (files.size() + config.workers - 1) / config.workers;
 
-            // For Each File in Files
-            // Readfile
-            //TODO - Each file contains 11k lines, we do not want to read the
-            // entire file, then parse. A good starting method is to prob begin reading the file
-            // assert it is a valid record, instantiate an eph
-            // then as we progress down the file, continue to build out the state of the eph
-            // at the end of file, our eph will be loaded.
+            std::vector<Satellite> sats(files.size());
 
-            // Create Eph
-            // Append
-            // return ephs
-            return ephs;
-        };
+            // Assign each worker a begin and end point 
+            std::vector<std::thread> threads;
+            for (std::size_t w = 0; w < config.workers; ++w){
+                std::size_t begin = w * numFilesPerWorker;
+                std::size_t end = std::min(begin + numFilesPerWorker, files.size());
+                threads.emplace_back(
+                    &FileLoader::worker,
+                    this,
+                    w,
+                    begin,
+                    end,
+                    std::ref(files),
+                    std::ref(sats)
+                );
+            }
+
+            for (auto& t : threads){
+                t.join();
+            }
+
+            std::cout << "Starlink Nodes: " << std::to_string(sats.size()) << "\n"; 
+
+            for (const auto& sat : sats) {
+                std::cout << "========================================\n";
+                std::cout << "Starlink: " + sat.starlinkId + "\n";
+                std::cout << "Status: " + sat.status + "\n\n";
+            }
+
+            return sats;
+        }
 
         Config& config;
-        /**
-         * baseDir - baseDir to read files from
-         * workers - num worker threads to spawn
-         */
+
+    private:
+        void worker(
+            int worker, 
+            std::size_t begin, std::size_t end,
+            std::vector<std::filesystem::path>& files, 
+            std::vector<Satellite>& sats
+        ){
+            {
+                std::lock_guard<std::mutex> lock(coutMutex);
+                std::cout << "Worker: " << worker << "\n\tBegin-End: " 
+                          << begin << "-" << end << "\n";
+            }
+            
+            for (std::size_t i = begin; i < end; ++i){
+                try {
+                    Satellite sat(files[i]);
+                    sats[i] = sat;
+
+                } catch (const std::exception& e){
+                    std::lock_guard<std::mutex> lock(coutMutex);
+                    std::cout << "Worker " << worker
+                              << " failed on file: " << files[i]
+                              << "\nerror: "  << e.what() << "\n";
+                }
+                // Readfile
+                //TODO - Each file contains 11k lines, we do not want to read the
+                // entire file, then parse. A good starting method is to prob begin reading the file
+                // assert it is a valid record, instantiate an eph
+                // then as we progress down the file, continue to build out the state of the eph
+                // at the end of file, our eph will be loaded.
+
+                // Create Eph
+                // Append
+            }
+
+            return;
+        };
 };
 
 struct SetupResult {
@@ -270,6 +360,15 @@ int main(int argc, char* argv[]){
         return 1;
     }
 
+    std::unique_ptr<Loader> loader;
+
+    if (c.loader == "file"){
+        loader = std::make_unique<FileLoader>(c);
+    } else {
+        loader = std::make_unique<WebLoader>(c);
+    }
+
+    std::vector<Satellite> sats = loader->load();
 
     // ephs = loader.load()
 
