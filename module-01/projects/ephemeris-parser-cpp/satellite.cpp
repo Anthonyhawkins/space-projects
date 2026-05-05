@@ -183,8 +183,7 @@ class Satellite{
          * 
          * timestamp: 2026115100342.000 | YYYY DDD HHMMSS.sss
          * position: -1180.1537434667 6646.6792368759 -499.8923176295 | x y z | km
-         * velocity: -4.6181676683 -0.36589
-         * 21704 6.1230849038 | Vx Vy Vz | km/s
+         * velocity: -4.6181676683 -0.3658921704 6.1230849038 | Vx Vy Vz | km/s
          * 
          * covariance-matrix-input 
          * NOTE: this needs to be unpacked into a full 6x6 matrix, only the upper right of the matrix is provided
