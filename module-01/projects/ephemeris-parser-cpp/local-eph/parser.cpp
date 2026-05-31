@@ -6,8 +6,38 @@
 #include <ctime>
 #include <iostream>
 #include <optional>
+#include <tuple>
+#include <charconv>
 
 constexpr const char* TIME_FORMAT = "%Y-%m-%d %H:%M:%S UTC";
+
+
+std::optional<float> parseFloat(const std::string& s) {
+    float value{};
+    
+    // parse from start to last char + 1
+    std::from_chars_result res = std::from_chars(s.data(), s.data() + s.size(), value);
+
+    if (res.ec != std::errc() || res.ptr != s.data() + s.size()) {
+        return std::nullopt; // invalid or trailing garbage
+    }
+
+    return value;
+}
+
+std::optional<float> parseDouble(const std::string& s) {
+    double value{};
+
+    // parse from start to last char + 1
+    std::from_chars_result res = std::from_chars(s.data(), s.data() + s.size(), value);
+
+    if (res.ec != std::errc() || res.ptr != s.data() + s.size()) {
+        return std::nullopt;
+    }
+
+    return value;
+
+}
 
 std::optional<std::tm> parseTime(const std::string& input){
 
@@ -48,7 +78,25 @@ std::string parseValueFromLabel(const std::string& line, const std::string& labe
 
 }
 
+
+struct Metadata {
+    std::string created;
+    std::string start;
+    std::string stop;
+    std::string step;
+    std::string source;
+};
+
+struct ParseHeaderResult {
+    std::string error;
+    Metadata metadata;
+};
+
+//TODO return Parse Result
 void parseHeader(std::vector<std::string> lines){
+
+    ParseHeaderResult result;
+
     const std::string CREATED_LABEL = "created:";
     const std::string START_LABEL = "ephemeris_start:";
     const std::string STOP_LABEL = "ephemeris_stop:";
@@ -56,7 +104,7 @@ void parseHeader(std::vector<std::string> lines){
     const std::string SOURCE_LABEL = "ephemeris_source:";
 
     if (lines.size() < 4) {
-        //bad header, expecting 4 lines
+        result.error = "Unable to parse header. Expected 4 lines, Got " + std::to_string(lines.size());
         return;
     }
 
@@ -71,13 +119,13 @@ void parseHeader(std::vector<std::string> lines){
 
     std::string createdTs = parseValueFromLabel(createdLine, CREATED_LABEL, "");
     if (createdTs.empty()) { 
-        // bad parse of source line
+        result.error = "Unable to parse timestamp from label: '" + CREATED_LABEL + "' on line: " + createdLine;
         return;
     }
 
     std::optional<std::tm> createdAtTime = parseTime(createdTs);
     if (!createdAtTime){
-        //bad created at time
+        result.error = "Unable to create time from label on line: " + createdLine;
         return;
     }
 
@@ -127,7 +175,6 @@ void parseHeader(std::vector<std::string> lines){
 
 }
 
-
 std::vector<std::string> split(const std::string& input, char delim){
     std::vector<std::string> parts;
     std::size_t start = 0;
@@ -143,15 +190,108 @@ std::vector<std::string> split(const std::string& input, char delim){
     return parts;
 };
 
+struct PositionVec {
+    float x;
+    float y;
+    float z;
+};
+
+struct VelocityVec {
+    float vx;
+    float vy;
+    float vz;
+};
+
+
+struct TimeStep {
+    std::optional<std::tm> time;
+    PositionVec position;
+    VelocityVec velocity;
+    std::vector<std::vector<double>> covariance;
+};
+
+
+struct ParseEntryResult {
+    std::string error;
+    TimeStep timestep;
+};
+
+//TODO return Parse Result
 void parseEntry(std::vector<std::string> lines){
 
-    /**
-     * record
+    ParseEntryResult result; 
+
+    if (lines.size() < 4) {
+        result.error = "Failed to parse Entry, expected exactly 4 lines. Got " + std::to_string(lines.size()) + " lines.";
+        return;
+    }
+
+    /** record
      * 
      * timestamp: 2026115100342.000 | YYYY DDD HHMMSS.sss
      * position: -1180.1537434667 6646.6792368759 -499.8923176295 | x y z | km
      * velocity: -4.6181676683 -0.3658921704 6.1230849038 | Vx Vy Vz | km/s
      * 
+     */
+
+    std::string positionAndVelocity = lines[0];
+    std::vector<std::string> positionAndVelocityParts = split(positionAndVelocity, ' ');
+
+    if (positionAndVelocityParts.size() != 7){
+        result.error = "Failed to parse Entry, Expected 1 timestamp, 3 positions, and 3 velocity values.  Got " + std::to_string(positionAndVelocityParts.size()) + " values.";
+        return;
+    }
+
+    std::string timeStamp = positionAndVelocityParts[0];
+
+    std::string xStr = positionAndVelocityParts[1];
+    std::string yStr = positionAndVelocityParts[2];
+    std::string zStr = positionAndVelocityParts[3];
+    std::string vxStr = positionAndVelocityParts[4];
+    std::string vyStr = positionAndVelocityParts[5];
+    std::string vzStr = positionAndVelocityParts[6];
+    
+    PositionVec xyz;
+    auto x = parseFloat(xStr);
+    if (!x){
+        result.error = "Failed to parse X for Position Vector. Expected parsable float.  Got " + xStr + " at x _ _";
+        return;
+    }
+
+    auto y = parseFloat(yStr);
+    if (!y){
+        result.error = "Failed to parse Y for Position Vector. Expected parsable float.  Got " + yStr + " at _ y _";
+        return;
+    }
+
+    auto z = parseFloat(zStr);
+    if (!z){
+        result.error = "Failed to parse Y for Position Vector. Expected parsable float.  Got " + zStr + " at _ _ z";
+        return;
+    }
+
+    VelocityVec vxyz;
+    auto vx = parseFloat(vxStr);
+    if (!vx){
+        result.error = "Failed to parse X for Velocity Vector. Expected parsable float.  Got " + vxStr + " at vx _ _";
+        return;
+    }
+
+    auto vy = parseFloat(vyStr);
+    if (!vy){
+        result.error = "Failed to parse Y for Velocity Vector. Expected parsable float.  Got " + vyStr + " at _ vy _";
+        return;
+    }
+
+    auto vz = parseFloat(vzStr);
+    if (!vz){
+        result.error = "Failed to parse Y for Velocity Vector. Expected parsable float.  Got " + vzStr + " at _ _ vz";
+        return;
+    }
+
+
+    /**
+
      * covariance-matrix-input 
      * NOTE: this needs to be unpacked into a full 6x6 matrix, only the upper right of the matrix is provided
      *          
@@ -163,7 +303,40 @@ void parseEntry(std::vector<std::string> lines){
      * uncertainty in [x y z vx vy vz] | [U V W Udot Vdot Wdot] | satellite is probably here ± uncertainty
      */
 
+    std::vector<std::string> seed = split(lines[1] + " " + lines[2] + " " + lines[3], ' ');
+    std::vector<std::vector<std::string>> covarianceMatrix(6, std::vector<std::string>(6));
 
+    if (seed.size() != 21){
+        result.error = "Unable to construct Covariance matrix, expected 21 seed values. Got " + std::to_string(seed.size());
+        return;
+        // not enough values to unpack
+    }
+
+    double value = 0;
+    std::size_t k = 0;
+    for (std::size_t i = 0; i < 6; ++i){
+        for (std::size_t j = i; j < 6; ++j){
+            
+            auto val = parseDouble(seed[k]);
+            if (!val){
+                result.error = "Failed to parse seed value while constructing Covariance matrix, expected parsable double.  Got " + seed[k] + ".";
+                return;
+            }
+
+            covarianceMatrix[i][j] = value;
+            covarianceMatrix[j][i] = value;
+            ++k;
+        }
+    }
+
+    std::cout << "\nCovariance Matrix (6x6)\n\n";
+
+    for (std::size_t i = 0; i < 6; ++i){
+        for (std::size_t j = 0; j < 6; ++j){
+            std::cout << std::setw(3) << covarianceMatrix[i][j]  << " ";
+        }
+        std::cout << "\n";
+    }
 
 }
 

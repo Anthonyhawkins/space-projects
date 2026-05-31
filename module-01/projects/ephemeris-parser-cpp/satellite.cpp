@@ -76,7 +76,6 @@ class Satellite{
             status = nameParts[5];
             internalExportId = nameParts[6];
             classification = nameParts[7];
-
         }
 
         std::string fileName;
